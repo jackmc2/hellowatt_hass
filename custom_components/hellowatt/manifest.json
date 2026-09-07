@@ -4,10 +4,10 @@
   "codeowners": ["@homeassistant-fr-ecosystem"],
   "config_flow": true,
   "dependencies": ["recorder"],
-  "documentation": "https://github.com/homeassistant-fr-ecosystem/hellowatt_hass",
+  "documentation": "https://github.com/jackmc2/hellowatt_hass",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/homeassistant-fr-ecosystem/hellowatt_hass/issues",
   "requirements": [],
-  "version": "1.0.0"
+  "version": "1.0.1-jackmc2"
 }
