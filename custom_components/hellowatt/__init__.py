@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.util import dt as dt_util
 
 from .client import HelloWattApiClient
 from .const import DOMAIN, LOGGER
@@ -23,9 +26,24 @@ from .importer import (
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
+# HelloWatt rate-limits login attempts with HTTP 429. Keep a local cooldown so
+# Home Assistant's automatic config-entry retries do not repeatedly hit the
+# login endpoint while the remote rate limit is still active.
+RATE_LIMIT_COOLDOWN = timedelta(hours=1)
+_rate_limit_until: datetime | None = None
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HelloWatt from a config entry."""
+    global _rate_limit_until
+
+    now = dt_util.utcnow()
+    if _rate_limit_until is not None and now < _rate_limit_until:
+        remaining = max(1, int((_rate_limit_until - now).total_seconds()))
+        raise ConfigEntryNotReady(
+            f"HelloWatt login rate limit cooldown active "
+            f"({remaining} seconds remaining)"
+        )
 
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
@@ -38,6 +56,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     try:
         await client.authenticate()
+    except aiohttp.ClientResponseError as err:
+        if err.status == 429:
+            _rate_limit_until = dt_util.utcnow() + RATE_LIMIT_COOLDOWN
+            LOGGER.warning(
+                "HelloWatt login rate-limited (HTTP 429); "
+                "suppressing new login attempts for %s",
+                RATE_LIMIT_COOLDOWN,
+            )
+            raise ConfigEntryNotReady(
+                "HelloWatt login temporarily rate-limited (HTTP 429)"
+            ) from err
+        raise
     except Exception as err:
         error_str = str(err).lower()
         # Check if the error is authentication-related
@@ -46,6 +76,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "Authentication failed. Please reauthenticate."
             ) from err
         raise
+
+    # Authentication succeeded: clear any stale cooldown.
+    _rate_limit_until = None
 
     # Create coordinators for each home/PDL
     hass.data.setdefault(DOMAIN, {})
