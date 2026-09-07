@@ -13,11 +13,15 @@ The upstream integration authenticates against `https://www.hellowatt.fr/account
 
 When HelloWatt rate-limits login attempts and returns HTTP `429`, repeated Home Assistant setup retries, manual reloads, or restarts can generate additional login attempts while the remote limit is still active.
 
-This fork adds a local rate-limit cooldown in the integration setup path:
+This fork adds explicit rate-limit protection in the integration setup path:
 
-- when authentication receives HTTP `429`, the config entry is reported as temporarily unavailable with `ConfigEntryNotReady`;
-- new setup attempts are suppressed locally for **1 hour** in the current Home Assistant process;
-- successful authentication clears the cooldown;
+- authentication **does not retry** after an HTTP `429`;
+- the very first `429` is immediately propagated to the Home Assistant config-entry layer;
+- if HelloWatt provides a `Retry-After` header, its duration is used for the cooldown;
+- otherwise the fallback cooldown is **1 hour**;
+- the cooldown deadline is persisted with Home Assistant storage, so reloads and Home Assistant restarts do not bypass it;
+- new setup attempts are locally suppressed until the persisted deadline expires;
+- successful authentication clears any stale cooldown;
 - the normal authentication-error handling for invalid credentials remains unchanged.
 
 The fork also includes historical-statistics fixes used by the Home Assistant energy dashboard:
@@ -30,14 +34,8 @@ The fork also includes historical-statistics fixes used by the Home Assistant en
 Current fork version:
 
 ```text
-1.0.2-jackmc2
+1.0.3-jackmc2
 ```
-
-### Important limitation
-
-The HTTP 429 cooldown is stored in memory. Restarting Home Assistant clears it. Therefore, if HelloWatt is actively rate-limiting the account, repeatedly restarting or manually reloading the integration can still defeat the protection.
-
-The recommended behaviour after a `429` is to leave Home Assistant running and allow the integration to recover without repeated manual reloads.
 
 ## Upstream compatibility
 
@@ -217,28 +215,27 @@ Login GET returned 429
 ClientResponseError: 429, message='Too Many Requests'
 ```
 
-With this fork, the first HTTP `429` encountered during config-entry authentication activates a one-hour local cooldown and Home Assistant treats the integration as temporarily unavailable instead of treating the setup as a permanent authentication failure.
+With `1.0.3-jackmc2`, authentication does not perform a second request after the first HTTP `429`. The error is immediately returned to the config-entry setup code, which stores a cooldown deadline and reports the integration as temporarily unavailable.
 
-During the cooldown, logs may contain a message similar to:
+If HelloWatt supplies a standard `Retry-After` response header, the fork uses that value. `Retry-After` is accepted both as a number of seconds and as an HTTP date. If HelloWatt does not supply it, the integration falls back to a one-hour cooldown.
 
-```text
-HelloWatt login rate limit cooldown active
-```
+The cooldown is stored in Home Assistant persistent storage on a per-config-entry basis. Restarting or reloading Home Assistant therefore no longer clears the protection.
 
-or:
+During the cooldown, Home Assistant may display a message similar to:
 
 ```text
-HelloWatt login temporarily rate-limited (HTTP 429)
+HelloWatt login rate limit cooldown active (802 seconds remaining)
 ```
+
+No HelloWatt authentication request is made while that persisted cooldown is active.
 
 ### What to do after a 429
 
-- Do not repeatedly reload the HelloWatt integration.
-- Do not repeatedly restart Home Assistant.
-- Leave Home Assistant running and allow the remote rate limit to expire.
-- Verify later that the HelloWatt sensors become available again.
+Normally, nothing is required. Leave the integration enabled and allow Home Assistant to retry automatically after the cooldown expires.
 
-The actual duration of HelloWatt's server-side rate limit is controlled by HelloWatt and is not known by this integration.
+Repeated manual reloads or Home Assistant restarts should no longer bypass the stored cooldown, but they are still unnecessary.
+
+The actual duration and policy of HelloWatt's server-side rate limit remain controlled by HelloWatt. The fork can avoid making additional authentication attempts during the known cooldown, but it cannot guarantee that HelloWatt will never return an HTTP `429` on a future legitimate request.
 
 ## Data update behaviour
 
@@ -246,12 +243,13 @@ The actual duration of HelloWatt's server-side rate limit is controlled by Hello
 - HelloWatt data can arrive with a delay depending on Enedis/provider availability
 - Expired sessions are re-authenticated automatically
 - Historical statistics can be imported with the dedicated service up to D-1 when data is available
+- Ordinary authenticated API requests retain their existing limited retry/backoff behaviour; the no-retry rule specifically protects authentication
 
 ## Architecture
 
 ```text
 custom_components/hellowatt/
-├── __init__.py           # Integration setup, rate-limit cooldown, services
+├── __init__.py           # Integration setup, persistent rate-limit cooldown, services
 ├── client.py             # HelloWatt API client and authentication
 ├── config_flow.py        # Configuration UI
 ├── const.py              # Constants
@@ -266,6 +264,14 @@ custom_components/hellowatt/
 ```
 
 ## Fork-specific changes
+
+### `1.0.3-jackmc2`
+
+- Stop authentication immediately on the first HTTP `429`; no 2 s / 4 s login retries.
+- Respect HelloWatt `Retry-After` when supplied, with a one-hour fallback when absent or invalid.
+- Persist rate-limit deadlines through Home Assistant storage.
+- Keep cooldowns per config entry and preserve them across reloads and Home Assistant restarts.
+- Clear stale cooldown state automatically after expiration or successful authentication.
 
 ### `1.0.2-jackmc2`
 
