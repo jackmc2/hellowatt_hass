@@ -5,7 +5,7 @@ Custom Home Assistant integration for monitoring energy consumption data from He
 > [!IMPORTANT]
 > This repository is a fork of [`homeassistant-fr-ecosystem/hellowatt_hass`](https://github.com/homeassistant-fr-ecosystem/hellowatt_hass).
 >
-> The purpose of this fork is to keep the upstream integration while adding a protective workaround for HelloWatt HTTP `429 Too Many Requests` responses during authentication.
+> The purpose of this fork is to keep the upstream integration while adding protective fixes for HelloWatt authentication rate limiting and Home Assistant historical statistics handling.
 
 ## Why this fork exists
 
@@ -20,15 +20,22 @@ This fork adds a local rate-limit cooldown in the integration setup path:
 - successful authentication clears the cooldown;
 - the normal authentication-error handling for invalid credentials remains unchanged.
 
+The fork also includes historical-statistics fixes used by the Home Assistant energy dashboard:
+
+- historical statistics are imported as **sum-only** statistics (`StatisticMeanType.NONE`);
+- historical imports may include data up to **D-1** when available from HelloWatt;
+- cumulative sums are seeded from the statistics immediately preceding the requested import range so partial re-imports keep continuity;
+- the daily electricity sensor remains `SensorStateClass.TOTAL`.
+
 Current fork version:
 
 ```text
-1.0.1-jackmc2
+1.0.2-jackmc2
 ```
 
 ### Important limitation
 
-The cooldown is stored in memory. Restarting Home Assistant clears it. Therefore, if HelloWatt is actively rate-limiting the account, repeatedly restarting or manually reloading the integration can still defeat the protection.
+The HTTP 429 cooldown is stored in memory. Restarting Home Assistant clears it. Therefore, if HelloWatt is actively rate-limiting the account, repeatedly restarting or manually reloading the integration can still defeat the protection.
 
 The recommended behaviour after a `429` is to leave Home Assistant running and allow the integration to recover without repeated manual reloads.
 
@@ -41,7 +48,7 @@ This fork is intentionally kept as close as possible to the original project:
 - Home Assistant domain remains `hellowatt`;
 - sensor names and services remain compatible with the upstream integration.
 
-The fork should be rebased/synchronised with upstream updates carefully so the HTTP 429 protection is not lost.
+The fork should be rebased/synchronised with upstream updates carefully so the fork-specific protections are not lost.
 
 ## Features
 
@@ -182,10 +189,10 @@ data:
 Parameters:
 
 - `start_date`: required, `YYYY-MM-DD`
-- `end_date`: optional, `YYYY-MM-DD`
+- `end_date`: optional, `YYYY-MM-DD`; dates newer than D-1 are automatically limited to D-1
 - `pdl`: optional; leave empty to process all available PDLs
 
-Historical data is imported in chunks to reduce API load.
+Historical data is imported month by month to reduce API load. The imported metadata is sum-only (`has_sum=True`, `has_mean=False`, `StatisticMeanType.NONE`), and existing cumulative sums immediately before the import window are reused to preserve continuity during partial re-imports.
 
 ### `hellowatt.clear_statistics`
 
@@ -238,7 +245,7 @@ The actual duration of HelloWatt's server-side rate limit is controlled by Hello
 - Default polling interval: 1 hour
 - HelloWatt data can arrive with a delay depending on Enedis/provider availability
 - Expired sessions are re-authenticated automatically
-- Historical statistics can be imported with the dedicated service
+- Historical statistics can be imported with the dedicated service up to D-1 when data is available
 
 ## Architecture
 
@@ -260,6 +267,13 @@ custom_components/hellowatt/
 
 ## Fork-specific changes
 
+### `1.0.2-jackmc2`
+
+- Import long-term statistics with `StatisticMeanType.NONE` instead of arithmetic means.
+- Allow historical import up to D-1 when data is available.
+- Keep cumulative statistical sums continuous during partial re-imports.
+- Keep `electricity_daily` as `SensorStateClass.TOTAL`.
+
 ### `1.0.1-jackmc2`
 
 - Handle HTTP `429` during config-entry authentication as temporary unavailability.
@@ -274,7 +288,7 @@ For general integration improvements, prefer contributing to the upstream projec
 
 <https://github.com/homeassistant-fr-ecosystem/hellowatt_hass>
 
-Fork-specific changes related to the HTTP 429 workaround can be tracked in this repository.
+Fork-specific changes can be tracked in this repository.
 
 ## License
 
@@ -284,7 +298,7 @@ This fork retains the license of the upstream project. See the `LICENSE` file.
 
 Original project: [`homeassistant-fr-ecosystem/hellowatt_hass`](https://github.com/homeassistant-fr-ecosystem/hellowatt_hass).
 
-Fork maintenance and HTTP 429 workaround: [`jackmc2/hellowatt_hass`](https://github.com/jackmc2/hellowatt_hass).
+Fork maintenance and additional protections: [`jackmc2/hellowatt_hass`](https://github.com/jackmc2/hellowatt_hass).
 
 ## Disclaimer
 
