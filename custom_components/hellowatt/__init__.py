@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta, timezone
+from email.utils import parsedate_to_datetime
+import math
+import time
+from typing import Any
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
@@ -10,7 +14,7 @@ from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
-from homeassistant.util import dt as dt_util
+from homeassistant.helpers.storage import Store
 
 from .client import HelloWattApiClient
 from .const import DOMAIN, LOGGER
@@ -26,20 +30,120 @@ from .importer import (
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
-# HelloWatt rate-limits login attempts with HTTP 429. Keep a local cooldown so
-# Home Assistant's automatic config-entry retries do not repeatedly hit the
-# login endpoint while the remote rate limit is still active.
+# HelloWatt rate-limits login attempts with HTTP 429. Persist the cooldown so
+# Home Assistant reloads and restarts cannot accidentally bypass it.
 RATE_LIMIT_COOLDOWN = timedelta(hours=1)
-_rate_limit_until: datetime | None = None
+RATE_LIMIT_STORAGE_VERSION = 1
+RATE_LIMIT_STORAGE_KEY = f"{DOMAIN}.rate_limit"
+RATE_LIMIT_DATA_KEY = f"{DOMAIN}_rate_limit_state"
+
+
+async def _async_get_rate_limit_state(hass: HomeAssistant) -> dict[str, Any]:
+    """Load and cache persisted rate-limit state."""
+    state = hass.data.get(RATE_LIMIT_DATA_KEY)
+    if state is not None:
+        return state
+
+    store = Store(hass, RATE_LIMIT_STORAGE_VERSION, RATE_LIMIT_STORAGE_KEY)
+    saved = await store.async_load() or {}
+    raw_entries = saved.get("entries", {})
+
+    entries: dict[str, float] = {}
+    if isinstance(raw_entries, dict):
+        for entry_id, value in raw_entries.items():
+            try:
+                entries[str(entry_id)] = float(value)
+            except (TypeError, ValueError):
+                continue
+
+    state = {"store": store, "entries": entries}
+    hass.data[RATE_LIMIT_DATA_KEY] = state
+    return state
+
+
+async def _async_save_rate_limit_state(
+    state: dict[str, Any],
+) -> None:
+    """Persist rate-limit state without breaking setup if storage fails."""
+    try:
+        await state["store"].async_save({"entries": state["entries"]})
+    except Exception as err:  # pragma: no cover - defensive persistence fallback
+        LOGGER.warning("Unable to persist HelloWatt rate-limit state: %s", err)
+
+
+async def _async_get_rate_limit_remaining(
+    hass: HomeAssistant, entry_id: str
+) -> int:
+    """Return remaining persisted cooldown in seconds for a config entry."""
+    state = await _async_get_rate_limit_state(hass)
+    entries: dict[str, float] = state["entries"]
+    until = entries.get(entry_id)
+
+    if until is None:
+        return 0
+
+    remaining = math.ceil(until - time.time())
+    if remaining > 0:
+        return remaining
+
+    entries.pop(entry_id, None)
+    await _async_save_rate_limit_state(state)
+    return 0
+
+
+async def _async_set_rate_limit(
+    hass: HomeAssistant, entry_id: str, seconds: int
+) -> None:
+    """Persist a cooldown deadline for a config entry."""
+    state = await _async_get_rate_limit_state(hass)
+    entries: dict[str, float] = state["entries"]
+    entries[entry_id] = time.time() + max(1, seconds)
+    await _async_save_rate_limit_state(state)
+
+
+async def _async_clear_rate_limit(hass: HomeAssistant, entry_id: str) -> None:
+    """Clear any persisted cooldown after successful authentication."""
+    state = await _async_get_rate_limit_state(hass)
+    entries: dict[str, float] = state["entries"]
+
+    if entry_id not in entries:
+        return
+
+    entries.pop(entry_id, None)
+    await _async_save_rate_limit_state(state)
+
+
+def _rate_limit_cooldown_seconds(err: aiohttp.ClientResponseError) -> int:
+    """Return Retry-After duration or the one-hour fallback."""
+    fallback = int(RATE_LIMIT_COOLDOWN.total_seconds())
+    headers = err.headers
+
+    if not headers:
+        return fallback
+
+    retry_after = headers.get("Retry-After")
+    if not retry_after:
+        return fallback
+
+    # Retry-After may be either a number of seconds or an HTTP date.
+    try:
+        return max(1, math.ceil(float(retry_after)))
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        retry_at = parsedate_to_datetime(retry_after)
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(1, math.ceil(retry_at.timestamp() - time.time()))
+    except (TypeError, ValueError, OverflowError):
+        return fallback
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HelloWatt from a config entry."""
-    global _rate_limit_until
-
-    now = dt_util.utcnow()
-    if _rate_limit_until is not None and now < _rate_limit_until:
-        remaining = max(1, int((_rate_limit_until - now).total_seconds()))
+    remaining = await _async_get_rate_limit_remaining(hass, entry.entry_id)
+    if remaining > 0:
         raise ConfigEntryNotReady(
             f"HelloWatt login rate limit cooldown active "
             f"({remaining} seconds remaining)"
@@ -58,14 +162,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await client.authenticate()
     except aiohttp.ClientResponseError as err:
         if err.status == 429:
-            _rate_limit_until = dt_util.utcnow() + RATE_LIMIT_COOLDOWN
+            cooldown_seconds = _rate_limit_cooldown_seconds(err)
+            await _async_set_rate_limit(hass, entry.entry_id, cooldown_seconds)
             LOGGER.warning(
                 "HelloWatt login rate-limited (HTTP 429); "
-                "suppressing new login attempts for %s",
-                RATE_LIMIT_COOLDOWN,
+                "suppressing new login attempts for %s seconds",
+                cooldown_seconds,
             )
             raise ConfigEntryNotReady(
-                "HelloWatt login temporarily rate-limited (HTTP 429)"
+                f"HelloWatt login temporarily rate-limited (HTTP 429); "
+                f"cooldown {cooldown_seconds} seconds"
             ) from err
         raise
     except Exception as err:
@@ -77,8 +183,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ) from err
         raise
 
-    # Authentication succeeded: clear any stale cooldown.
-    _rate_limit_until = None
+    # Authentication succeeded: clear any stale persisted cooldown.
+    await _async_clear_rate_limit(hass, entry.entry_id)
 
     # Create coordinators for each home/PDL
     hass.data.setdefault(DOMAIN, {})
