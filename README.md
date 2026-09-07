@@ -1,284 +1,256 @@
-# HelloWatt Home Assistant Integration
+# HelloWatt Home Assistant Integration — jackmc2 fork
 
-A custom Home Assistant integration for monitoring your energy consumption data from HelloWatt, a French energy monitoring service.
+Custom Home Assistant integration for monitoring energy consumption data from HelloWatt.
+
+> [!IMPORTANT]
+> This repository is a fork of [`homeassistant-fr-ecosystem/hellowatt_hass`](https://github.com/homeassistant-fr-ecosystem/hellowatt_hass).
+>
+> The purpose of this fork is to keep the upstream integration while adding a protective workaround for HelloWatt HTTP `429 Too Many Requests` responses during authentication.
+
+## Why this fork exists
+
+The upstream integration authenticates against `https://www.hellowatt.fr/accounts/login/` when the Home Assistant config entry is loaded.
+
+When HelloWatt rate-limits login attempts and returns HTTP `429`, repeated Home Assistant setup retries, manual reloads, or restarts can generate additional login attempts while the remote limit is still active.
+
+This fork adds a local rate-limit cooldown in the integration setup path:
+
+- when authentication receives HTTP `429`, the config entry is reported as temporarily unavailable with `ConfigEntryNotReady`;
+- new setup attempts are suppressed locally for **1 hour** in the current Home Assistant process;
+- successful authentication clears the cooldown;
+- the normal authentication-error handling for invalid credentials remains unchanged.
+
+Current fork version:
+
+```text
+1.0.1-jackmc2
+```
+
+### Important limitation
+
+The cooldown is stored in memory. Restarting Home Assistant clears it. Therefore, if HelloWatt is actively rate-limiting the account, repeatedly restarting or manually reloading the integration can still defeat the protection.
+
+The recommended behaviour after a `429` is to leave Home Assistant running and allow the integration to recover without repeated manual reloads.
+
+## Upstream compatibility
+
+This fork is intentionally kept as close as possible to the original project:
+
+- upstream repository: <https://github.com/homeassistant-fr-ecosystem/hellowatt_hass>
+- fork repository: <https://github.com/jackmc2/hellowatt_hass>
+- Home Assistant domain remains `hellowatt`;
+- sensor names and services remain compatible with the upstream integration.
+
+The fork should be rebased/synchronised with upstream updates carefully so the HTTP 429 protection is not lost.
 
 ## Features
 
-This integration provides real-time access to your energy consumption data:
+### Electricity monitoring
 
-### Electricity Monitoring
 - Daily electricity consumption (kWh)
 - Peak hours (HP) and off-peak hours (HC) consumption for dual-rate contracts
 - Yesterday's consumption
 - Weekly consumption total
 - CO2 emissions tracking
-- Cost breakdown (total, consumption, and subscription costs)
+- Cost breakdown
 
-### Gas Monitoring
+### Gas monitoring
+
 - Daily gas consumption (kWh)
 - Yesterday's consumption
 - Weekly consumption total
 - CO2 emissions tracking
-- Cost breakdown (total, consumption, and subscription costs)
+- Cost breakdown
 
-### Additional Features
+### Additional features
+
 - Temperature monitoring
 - Historical data import service
-- Multi-home/PDL support
+- Multi-home / multi-PDL support
 - Automatic session management with re-authentication
-- Device information with contract details
+- Contract information
+- Home Assistant diagnostics
+- System health reporting
 
-## Installation
+## Installation with HACS
 
-### Manual Installation
+This fork is installed as a **custom HACS repository**.
 
-1. Copy the `custom_components/hellowatt` directory to your Home Assistant `custom_components` folder:
-   ```
-   <config_directory>/custom_components/hellowatt/
-   ```
+### 1. Add the custom repository
 
-2. Restart Home Assistant
+In Home Assistant:
 
-3. Go to Configuration > Integrations
+1. Open **HACS**.
+2. Open the menu **⋮**.
+3. Select **Custom repositories**.
+4. Add:
 
-4. Click the + button and search for "HelloWatt"
+```text
+https://github.com/jackmc2/hellowatt_hass
+```
 
-5. Enter your HelloWatt credentials (email and password)
+5. Select category **Integration**.
+6. Add the repository.
 
-### HACS Installation (when available)
+HACS should display the fork as:
 
-This integration is not yet available in HACS. Follow the manual installation steps above.
+```text
+Hellowatt (jackmc2 fork)
+@jackmc2
+```
+
+### 2. Install the integration
+
+Install **Hellowatt (jackmc2 fork)** from HACS, then restart Home Assistant once.
+
+If the upstream HelloWatt repository was previously installed through HACS, make sure the fork is the repository currently installed before restarting.
+
+## Manual installation
+
+Copy the directory:
+
+```text
+custom_components/hellowatt
+```
+
+into:
+
+```text
+<home-assistant-config>/custom_components/hellowatt
+```
+
+Then restart Home Assistant.
 
 ## Configuration
 
-### Initial Setup
+1. Open **Settings → Devices & services**.
+2. Select **Add Integration**.
+3. Search for **HelloWatt**.
+4. Enter the HelloWatt account email and password.
 
-1. Navigate to Settings > Devices & Services
-2. Click "Add Integration"
-3. Search for "HelloWatt"
-4. Enter your HelloWatt account credentials:
-   - Email: Your HelloWatt account email
-   - Password: Your HelloWatt account password
-
-The integration will automatically discover all homes (PDLs) associated with your account and create sensors for each.
+The integration automatically discovers the homes/PDLs associated with the account.
 
 ### Options
 
-After the integration is set up, click **Configure** on the HelloWatt integration card to adjust:
+The integration supports configurable polling and lookback periods.
 
-| Option | Default | Range | Description |
-|--------|---------|-------|-------------|
-| Update Interval | 1 hour | 1–24 hours | How often to poll the HelloWatt API |
-| Data Recovery Period | 7 days | 3–30 days | How many days of data to fetch per update — increasing this helps recover missed updates |
+| Option | Default | Description |
+|---|---:|---|
+| Update interval | 1 hour | Frequency of HelloWatt API refreshes |
+| Data recovery period | 7 days | Number of days fetched per update to recover missed data |
 
-## Sensors
+## Main sensors
 
-The integration creates the following sensors for each PDL (Point de Livraison):
+Entity IDs include the PDL when created by Home Assistant. The exact generated IDs can therefore differ between installations.
 
-### Electricity Sensors
-| Sensor | Description | Unit | State Class |
-|--------|-------------|------|-------------|
-| `sensor.electricity_daily` | Today's electricity consumption | kWh | total |
-| `sensor.electricity_peak_hours_daily` | Peak hours consumption (HP contracts) | kWh | total |
-| `sensor.electricity_off_peak_hours_daily` | Off-peak hours consumption (HC contracts) | kWh | total |
-| `sensor.electricity_day_before` | Yesterday's consumption | kWh | total |
-| `sensor.electricity_weekly` | Last 7 days consumption | kWh | total |
-| `sensor.electricity_co2_emissions_daily` | Daily CO2 emissions | kg | total_increasing |
-| `sensor.electricity_cost_daily` | Total daily electricity cost | EUR | total |
-| `sensor.electricity_cost_consumption_daily` | Consumption cost only | EUR | total |
-| `sensor.electricity_cost_subscription_daily` | Subscription cost | EUR | total |
+### Electricity
 
-### Gas Sensors
-| Sensor | Description | Unit | State Class |
-|--------|-------------|------|-------------|
-| `sensor.gas_daily` | Today's gas consumption | kWh | total |
-| `sensor.gas_day_before` | Yesterday's consumption | kWh | total |
-| `sensor.gas_weekly` | Last 7 days consumption | kWh | total |
-| `sensor.gas_co2_emissions_daily` | Daily CO2 emissions | kg | total_increasing |
-| `sensor.gas_cost_daily` | Total daily gas cost | EUR | total |
-| `sensor.gas_cost_consumption_daily` | Consumption cost only | EUR | total |
-| `sensor.gas_cost_subscription_daily` | Subscription cost | EUR | total |
+- Daily electricity consumption
+- Peak-hours consumption
+- Off-peak-hours consumption
+- Previous-day consumption
+- Weekly consumption
+- CO2 emissions
+- Daily cost
+- Consumption cost
+- Subscription cost
 
-### Other Sensors
-| Sensor | Description | Unit | State Class |
-|--------|-------------|------|-------------|
-| `sensor.temperature` | Current temperature | °C | measurement |
+### Gas
 
-### Diagnostic Sensors
+Equivalent sensors are created when a gas contract is available.
 
-| Sensor | Description | Unit | State Class |
-|--------|-------------|------|-------------|
-| `sensor.contract_provider` | Energy contract provider name | — | — |
-| `sensor.contract_offer` | Energy contract offer name | — | — |
+### Diagnostics
 
-These sensors are in the **Diagnostic** entity category and are hidden by default in the Home Assistant UI. They reflect the active contract data fetched from HelloWatt.
+Contract provider and offer information are exposed as diagnostic entities and may be hidden by default in the Home Assistant UI.
 
 ## Services
 
-### hellowatt.import_historical_data
+### `hellowatt.import_historical_data`
 
-Import historical consumption data from HelloWatt into Home Assistant's long-term statistics.
+Imports historical HelloWatt consumption into Home Assistant long-term statistics.
 
-**Parameters:**
-- `start_date` (required): Start date for import (YYYY-MM-DD)
-- `end_date` (optional): End date for import (YYYY-MM-DD), defaults to 2 days ago
-- `pdl` (optional): Specific PDL to import data for, leave empty to import all PDLs
+Example:
 
-**Example:**
 ```yaml
 service: hellowatt.import_historical_data
 data:
-  start_date: "2023-01-01"
-  end_date: "2024-12-31"
+  start_date: "2026-08-01"
+  end_date: "2026-08-31"
   pdl: "12345678901234"
 ```
 
-**Notes:**
-- Data is imported month by month to avoid API rate limits
-- The API typically has data available up to D-2 (2 days ago)
-- Historical data is imported into Home Assistant's statistics database
-- Supports both electricity and gas data where available
+Parameters:
 
-### hellowatt.clear_statistics
+- `start_date`: required, `YYYY-MM-DD`
+- `end_date`: optional, `YYYY-MM-DD`
+- `pdl`: optional; leave empty to process all available PDLs
 
-Clear all HelloWatt statistics from the Home Assistant database. Use this before re-importing data to avoid conflicts with old metadata.
+Historical data is imported in chunks to reduce API load.
 
-**Parameters:**
-- `pdl` (optional): Specific PDL to clear statistics for, leave empty to clear all PDLs
+### `hellowatt.clear_statistics`
 
-**Example:**
+Clears HelloWatt historical statistics from Home Assistant.
+
+Example:
+
 ```yaml
 service: hellowatt.clear_statistics
 data:
   pdl: "12345678901234"
 ```
 
-**Notes:**
-- Restart Home Assistant after clearing to refresh the Energy Dashboard
-- This removes only historical statistics records — sensor entities are not deleted
-- Use in combination with `import_historical_data` when you need to re-import a date range from scratch
+Use this only when intentionally rebuilding HelloWatt statistics.
 
-## Data Update
+## HTTP 429 troubleshooting
 
-- The integration polls the HelloWatt API every hour
-- Data represents consumption from the previous day (D-1), as energy providers typically report with a 1-day delay
-- Automatic re-authentication handles session expiration
+A typical HelloWatt rate-limit failure looks like:
 
-## Device Information
+```text
+Login GET returned 429
+ClientResponseError: 429, message='Too Many Requests'
+```
 
-Each PDL appears as a separate device in Home Assistant with the following information:
-- Manufacturer: HelloWatt
-- Model: Energy Monitor
-- Software Version: Contract provider and offer name
-- Configuration URL: Direct link to HelloWatt account dashboard
+With this fork, the first HTTP `429` encountered during config-entry authentication activates a one-hour local cooldown and Home Assistant treats the integration as temporarily unavailable instead of treating the setup as a permanent authentication failure.
+
+During the cooldown, logs may contain a message similar to:
+
+```text
+HelloWatt login rate limit cooldown active
+```
+
+or:
+
+```text
+HelloWatt login temporarily rate-limited (HTTP 429)
+```
+
+### What to do after a 429
+
+- Do not repeatedly reload the HelloWatt integration.
+- Do not repeatedly restart Home Assistant.
+- Leave Home Assistant running and allow the remote rate limit to expire.
+- Verify later that the HelloWatt sensors become available again.
+
+The actual duration of HelloWatt's server-side rate limit is controlled by HelloWatt and is not known by this integration.
+
+## Data update behaviour
+
+- Default polling interval: 1 hour
+- HelloWatt data can arrive with a delay depending on Enedis/provider availability
+- Expired sessions are re-authenticated automatically
+- Historical statistics can be imported with the dedicated service
 
 ## Architecture
 
-### Components
-
-#### [\_\_init\_\_.py](custom_components/hellowatt/__init__.py)
-Main integration setup and historical data import service:
-- Entry setup and teardown
-- API client initialization with cookie-based session management
-- Multi-PDL coordinator creation
-
-#### [client.py](custom_components/hellowatt/client.py)
-HelloWatt API client:
-- Session-based authentication with CSRF token handling
-- Automatic session refresh on 403 errors
-- Methods for fetching consumption data (electricity and gas)
-- Temperature and contract data retrieval
-- Comprehensive error logging
-
-#### [coordinator.py](custom_components/hellowatt/coordinator.py)
-Data update coordinator:
-- Hourly data refresh
-- Fetches 7 days of historical data for reliability
-- Processes electricity, gas, and temperature data
-- Extracts contract information
-- Error handling with `UpdateFailed` exceptions
-
-#### [sensor.py](custom_components/hellowatt/sensor.py)
-Sensor platform implementation:
-- Dynamic sensor creation based on available data
-- Device grouping by PDL
-- Support for energy, cost, and CO2 sensors
-- Proper Home Assistant entity configuration
-
-#### [importer.py](custom_components/hellowatt/importer.py)
-Historical data import and statistics management:
-- `import_historical_data` and `clear_statistics` service handlers
-- Monthly chunked import with retry logic (exponential backoff on 5xx errors)
-- Cumulative sum seeding so partial re-imports don't reset running totals
-- Negative value clamping for data quality
-
-#### [diagnostics.py](custom_components/hellowatt/diagnostics.py)
-Home Assistant diagnostics support:
-- Config-entry diagnostics: coordinator status, available sensor keys, HP/HC detection, entity states
-- Per-device diagnostics: all current sensor values for a specific PDL
-- Access via Settings > Devices & Services > HelloWatt > three-dot menu > Download Diagnostics
-
-#### [system_health.py](custom_components/hellowatt/system_health.py)
-System health reporting visible in Settings > System > System Information:
-- API endpoint reachability check
-- Number of configured accounts and total PDL coordinators
-
-#### [config_flow.py](custom_components/hellowatt/config_flow.py)
-Configuration flow:
-- User-friendly setup via UI
-- Username and password collection
-- Unique ID based on username to prevent duplicates
-
-#### [const.py](custom_components/hellowatt/const.py)
-Constants and configuration:
-- Domain definition
-- API URL
-- Logger configuration
-
-## API Integration
-
-The integration communicates with the HelloWatt API:
-- Base URL: `https://www.hellowatt.fr/api`
-- Authentication: Cookie-based session with CSRF tokens
-- Endpoints used:
-  - `/homes` - List available homes/PDLs
-  - `/homes/{home_id}/sge_measures/conso_daily` - Electricity consumption
-  - `/homes/{home_id}/adict_measures/conso_daily` - Gas consumption
-  - `/homes/{home_id}/temperature_measures/yearly` - Temperature data
-  - `/homes/{home_id}/contracts` - Contract information
-
-## Troubleshooting
-
-### Sensors showing "Unavailable"
-- Check that your HelloWatt account has active energy contracts
-- Verify that data is available for your PDL on the HelloWatt website
-- Check Home Assistant logs for authentication errors
-
-### Missing peak/off-peak sensors
-- These sensors only appear for dual-rate (HP/HC) electricity contracts
-- Base rate contracts will only show the total consumption sensor
-
-### Gas sensors not appearing
-- Gas sensors only appear if you have an active gas contract
-- The integration gracefully handles missing gas data
-
-### Historical import service fails
-- Ensure end_date is at least 2 days in the past (API limitation)
-- Check that you have sufficient data available on HelloWatt's website
-- Review logs for specific API errors
-
-## Development
-
-### File Structure
-```
+```text
 custom_components/hellowatt/
-├── __init__.py           # Integration setup and service registration
-├── client.py             # API client
-├── config_flow.py        # Configuration UI and options flow
+├── __init__.py           # Integration setup, rate-limit cooldown, services
+├── client.py             # HelloWatt API client and authentication
+├── config_flow.py        # Configuration UI
 ├── const.py              # Constants
-├── coordinator.py        # Data update coordinator
-├── diagnostics.py        # HA diagnostics support
-├── importer.py           # Historical data import & statistics management
+├── coordinator.py        # Periodic data updates
+├── diagnostics.py        # Home Assistant diagnostics
+├── importer.py           # Historical import and statistics management
 ├── manifest.json         # Integration metadata
 ├── sensor.py             # Sensor entities
 ├── services.yaml         # Service definitions
@@ -286,29 +258,34 @@ custom_components/hellowatt/
 └── system_health.py      # System health reporting
 ```
 
-### Key Design Patterns
-- **CoordinatorEntity**: Efficient state management and updates
-- **Async/Await**: Non-blocking API calls
-- **Session Management**: Automatic re-authentication on expiry
-- **Multi-home Support**: Separate coordinator per PDL
-- **External Statistics**: Long-term historical data storage
+## Fork-specific changes
 
-## Contributing
+### `1.0.1-jackmc2`
 
-Contributions are welcome. Please ensure:
-- Code follows Home Assistant coding standards
-- All sensors have proper device classes and units
-- Changes are tested with real HelloWatt accounts
-- Documentation is updated
+- Handle HTTP `429` during config-entry authentication as temporary unavailability.
+- Add a local one-hour authentication cooldown after a `429`.
+- Prevent Home Assistant automatic setup retries from repeatedly hitting HelloWatt during that cooldown.
+- Identify the HACS repository as **Hellowatt (jackmc2 fork)**.
+- Keep the Home Assistant integration domain `hellowatt` for compatibility.
+
+## Development and contributions
+
+For general integration improvements, prefer contributing to the upstream project whenever possible:
+
+<https://github.com/homeassistant-fr-ecosystem/hellowatt_hass>
+
+Fork-specific changes related to the HTTP 429 workaround can be tracked in this repository.
 
 ## License
 
-This integration is provided as-is. Please check the LICENSE file for details.
+This fork retains the license of the upstream project. See the `LICENSE` file.
 
 ## Credits
 
-Developed for use with the HelloWatt energy monitoring service (https://www.hellowatt.fr/).
+Original project: [`homeassistant-fr-ecosystem/hellowatt_hass`](https://github.com/homeassistant-fr-ecosystem/hellowatt_hass).
+
+Fork maintenance and HTTP 429 workaround: [`jackmc2/hellowatt_hass`](https://github.com/jackmc2/hellowatt_hass).
 
 ## Disclaimer
 
-This is an unofficial integration and is not affiliated with or endorsed by HelloWatt. Use at your own risk.
+This is an unofficial integration and is not affiliated with or endorsed by HelloWatt. Use it at your own risk.
