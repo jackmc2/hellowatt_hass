@@ -1,7 +1,7 @@
 {
   "domain": "hellowatt",
-  "name": "Hellowatt",
-  "codeowners": ["@homeassistant-fr-ecosystem"],
+  "name": "Hellowatt (jackmc2 fork)",
+  "codeowners": ["@jackmc2"],
   "config_flow": true,
   "dependencies": ["recorder"],
   "documentation": "https://github.com/jackmc2/hellowatt_hass",
