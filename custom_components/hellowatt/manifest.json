@@ -9,5 +9,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/homeassistant-fr-ecosystem/hellowatt_hass/issues",
   "requirements": [],
-  "version": "1.0.1-jackmc2"
+  "version": "1.0.2-jackmc2"
 }
