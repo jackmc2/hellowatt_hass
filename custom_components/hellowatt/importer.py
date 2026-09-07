@@ -21,6 +21,7 @@ except ImportError:
 
     class LocalStatisticMeanType:
         ARITHMETIC = "arithmetic"
+        NONE = "none"
 
     StatisticMeanType = LocalStatisticMeanType
 
@@ -311,7 +312,7 @@ async def _import_statistics(
                 statistic_id=statistic_id,
                 unit_of_measurement="kg",
                 unit_class="mass",
-                mean_type=StatisticMeanType.ARITHMETIC,
+                mean_type=StatisticMeanType.NONE,
             )
         elif "cost" in sensor_key:
             metadata = StatisticMetaData(
@@ -322,7 +323,7 @@ async def _import_statistics(
                 statistic_id=statistic_id,
                 unit_of_measurement="EUR",
                 unit_class=None,
-                mean_type=StatisticMeanType.ARITHMETIC,
+                mean_type=StatisticMeanType.NONE,
             )
         else:
             metadata = StatisticMetaData(
@@ -333,7 +334,7 @@ async def _import_statistics(
                 statistic_id=statistic_id,
                 unit_of_measurement="kWh",
                 unit_class="energy",
-                mean_type=StatisticMeanType.ARITHMETIC,
+                mean_type=StatisticMeanType.NONE,
             )
 
         try:
@@ -468,17 +469,17 @@ async def async_import_historical_data(hass: HomeAssistant, call: ServiceCall) -
     start_date = call.data["start_date"]
     target_pdl = call.data.get("pdl")
 
-    # Limit end_date to account for data availability
-    # API typically has data available up to D-2 (2 days ago)
+    # Limit end_date to account for data availability.
+    # HelloWatt data is normally available up to D-1.
     today = datetime.now().date()
-    max_available_date = today - timedelta(days=2)
+    max_available_date = today - timedelta(days=1)
 
     # Default to max available date instead of today
     end_date = call.data.get("end_date", max_available_date)
 
     if end_date > max_available_date:
         LOGGER.info(
-            "End date %s is too recent (data typically available up to D-2), automatically adjusted to %s",
+            "End date %s is too recent (data typically available up to D-1), automatically adjusted to %s",
             end_date,
             max_available_date,
         )
