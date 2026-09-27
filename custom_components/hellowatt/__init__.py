@@ -32,7 +32,7 @@ PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 # HelloWatt rate-limits login attempts with HTTP 429. Persist the cooldown so
 # Home Assistant reloads and restarts cannot accidentally bypass it.
-RATE_LIMIT_COOLDOWN = timedelta(hours=1)
+RATE_LIMIT_COOLDOWN = timedelta(hours=6)
 RATE_LIMIT_STORAGE_VERSION = 1
 RATE_LIMIT_STORAGE_KEY = f"{DOMAIN}.rate_limit"
 RATE_LIMIT_DATA_KEY = f"{DOMAIN}_rate_limit_state"
@@ -114,7 +114,7 @@ async def _async_clear_rate_limit(hass: HomeAssistant, entry_id: str) -> None:
 
 
 def _rate_limit_cooldown_seconds(err: aiohttp.ClientResponseError) -> int:
-    """Return Retry-After duration or the one-hour fallback."""
+    """Return Retry-After duration or the six-hour fallback."""
     fallback = int(RATE_LIMIT_COOLDOWN.total_seconds())
     headers = err.headers
 
