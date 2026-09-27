@@ -103,7 +103,7 @@ SENSOR_TYPES: dict[str, dict[str, Any]] = {
         "name": "Electricity CO2 Emissions Daily",
         "device_class": SensorDeviceClass.WEIGHT,
         "unit": UnitOfMass.KILOGRAMS,
-        "state_class": SensorStateClass.TOTAL_INCREASING,
+        "state_class": SensorStateClass.TOTAL,
         "icon": "mdi:molecule-co2",
         "suggested_display_precision": 3,
     },
@@ -111,7 +111,7 @@ SENSOR_TYPES: dict[str, dict[str, Any]] = {
         "name": "Gas CO2 Emissions Daily",
         "device_class": SensorDeviceClass.WEIGHT,
         "unit": UnitOfMass.KILOGRAMS,
-        "state_class": SensorStateClass.TOTAL_INCREASING,
+        "state_class": SensorStateClass.TOTAL,
         "icon": "mdi:molecule-co2",
         "suggested_display_precision": 3,
     },
@@ -231,7 +231,7 @@ class HelloWattSensor(CoordinatorEntity[HelloWattCoordinator], SensorEntity):
 
     Enhanced with Energy Dashboard compatibility:
     - suggested_display_precision for cleaner dashboard display
-    - last_reset property for TOTAL_INCREASING sensors
+    - last_reset property for daily TOTAL sensors
     """
 
     def __init__(
@@ -307,10 +307,7 @@ class HelloWattSensor(CoordinatorEntity[HelloWattCoordinator], SensorEntity):
     @property
     def last_reset(self):
         """Return midnight of today for TOTAL sensors so HA doesn't compute negative deltas across daily resets."""
-        if self._attr_state_class in (
-            SensorStateClass.TOTAL,
-            SensorStateClass.TOTAL_INCREASING,
-        ):
+        if self._attr_state_class == SensorStateClass.TOTAL:
             from homeassistant.util import dt as dt_util
 
             now = dt_util.now()
